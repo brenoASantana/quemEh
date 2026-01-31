@@ -21,7 +21,7 @@ function App() {
     return (
       <div className="container login-screen">
         <div className="login-card">
-          <h1>Quem É?</h1>
+          <h1>🤔 Quem É?</h1>
           <p className="subtitle">O jogo das respostas misteriosas</p>
 
           <div className="form">
@@ -32,7 +32,7 @@ function App() {
               onKeyPress={e => e.key === 'Enter' && name && room && connect(name, room)}
             />
             <input
-              placeholder="Código da sala"
+              placeholder="Código da sala (ex: GLOBO)"
               value={room}
               onChange={e => setRoom(e.target.value)}
               onKeyPress={e => e.key === 'Enter' && name && room && connect(name, room)}
@@ -42,8 +42,12 @@ function App() {
               disabled={!name || !room}
               className="btn-primary"
             >
-              Entrar
+              ENTRAR NA SALA
             </button>
+          </div>
+
+          <div className="tips">
+            <p>💡 Dica: Use o mesmo código para acessar a mesma sala</p>
           </div>
         </div>
       </div>

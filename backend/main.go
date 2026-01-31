@@ -1,20 +1,17 @@
 package main
 
 import (
-	"embed"
 	"fmt"
-	"io/fs"
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
-
-//go:embed dist/*
-var distFiles embed.FS
 
 type GameState string
 
@@ -92,27 +89,20 @@ func main() {
 
 	http.HandleFunc("/ws", handleConnections)
 
-	distFS, err := fs.Sub(distFiles, "dist")
-	if err != nil {
-		log.Fatal("Erro ao configurar arquivos embutidos:", err)
+	staticDir := "./frontend/dist"
+	if _, err := os.Stat(staticDir); err != nil {
+		staticDir = "./dist"
 	}
 
-	fileServer := http.FileServer(http.FS(distFS))
+	fileServer := http.FileServer(http.Dir(staticDir))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.ServeFileFS(w, r, distFS, "index.html")
-			return
-		}
-
-		file, err := distFS.Open(r.URL.Path[1:])
-		if err == nil {
-			file.Close()
+		path := r.URL.Path
+		if path != "/" && filepath.Ext(path) != "" {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
-
-		http.ServeFileFS(w, r, distFS, "index.html")
+		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 	})
 
 	log.Println("Servidor rodando em http://localhost:8080")
