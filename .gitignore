@@ -1,0 +1,35 @@
+# Binários e executáveis
+*.o
+*.a
+*.so
+backend/quemEh*
+frontend/dist/
+*.exe
+*.dll
+*.dylib
+
+# Go
+vendor/
+.env
+go.sum
+
+# Node/npm
+frontend/node_modules/
+frontend/npm-debug.log
+frontend/yarn-error.log
+*.pnpm-debug.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# Environment
+.env.local
+.env.*.local
