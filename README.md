@@ -1,53 +1,63 @@
 # Quem É?
 
-Um jogo online pra jogar com amigos. Vocês entram em uma sala, respondem perguntas e depois tentam adivinhar quem escreveu cada resposta. É divertido mesmo.
+Jogo de festa onde você responde perguntas e tenta adivinhar quem respondeu cada uma. Simples e divertido.
 
 ## Começar
 
-### Desenvolvimento
-```bash
-make dev
-```
+### Requisitos
+- Go 1.16+
+- Node.js 16+
 
-### Produção (compilado com go:embed)
+### Instalação
+
 ```bash
-make build
+git clone https://github.com/brenoASantana/quemEh
+cd quemEh
+
+cd frontend
+npm install
+npm run build
+cd ..
+
+cd backend
+go build -o ../quemEh
+cd ..
+
 ./quemEh
 ```
 
-Acesse [http://localhost:8080](http://localhost:8080).
-
-## Compartilhar com amigos remotos
-
-Use ngrok para dar acesso remoto:
-
-```bash
-ngrok http 8080
-```
-
-Compartilhe o link que aparecer. Veja mais em [NGROK.md](NGROK.md).
+Abre em http://localhost:8080
 
 ## Como funciona
 
-1. Alguém cria uma sala (vira o host/anfitrião)
-2. Amigos entram com o código da sala
-3. Host inicia o jogo
-4. Cada um responde uma pergunta (anônimo)
-5. Todos tentam adivinhar quem respondeu
-6. Ganha quem acertar mais
+1. Entra numa sala com um código
+2. O host começa o jogo
+3. Todos respondem a pergunta
+4. Todos votam em quem respondeu cada uma
+5. Ganha quem fizer 50 pontos primeiro
 
 ## Estrutura
 
 ```
-backend/      - Servidor Go (WebSocket + go:embed)
-frontend/     - Interface React
-docs/         - Documentação
-NGROK.md      - Guia de acesso remoto
+backend/   - Go + WebSocket
+frontend/  - React + Vite
 ```
 
-## Características
+## Tecnologia
 
-✅ **go:embed** - Frontend embutido no binário Go (compilação simplificada)
+- Go
+- React
+- WebSocket
+
+## Regras
+
+- Não pode votar em si mesmo
+- Não pode votar duas vezes na mesma resposta
+- 50 pontos pra ganhar
+
+---
+
+Feito por Breno Santana
 ✅ **ngrok-ready** - Funciona perfeitamente com URLs dinâmicas
 ✅ **WebSocket** - Comunicação em tempo real
 ✅ **Responsivo** - Funciona em desktop e mobile

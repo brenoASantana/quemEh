@@ -1,9 +1,9 @@
 import AnsweringPhase from './components/AnsweringPhase';
+import LobbyPhase from './components/LobbyPhase';
 import VotingPhase from './components/VotingPhase';
 
 import { useEffect, useState } from 'react';
 import './App.css';
-import Avatar from './Avatar';
 import AnswersReview from './components/AnswersReview';
 import Header from './components/Header';
 import Ranking from './components/Ranking';
@@ -106,32 +106,7 @@ function App() {
 
       <main className="game-content">
         {gameState.state === 'LOBBY' && (
-          <div className="phase lobby-phase">
-            <h2>Aguardando jogadores...</h2>
-            <div className="players-grid">
-              {gameState.players.map(p => (
-                <div key={p.id} className="player-card">
-                  <Avatar name={p.name} />
-                  <p className="player-name">{p.name}</p>
-                  {p.isHost && <span className="host-badge">HOST</span>}
-                  <p className="player-score">{p.score}</p>
-                </div>
-              ))}
-            </div>
-
-            {isHost ? (
-              <button
-                className="btn-primary btn-large"
-                onClick={() => sendMessage('START_GAME', null)}
-              >
-                Começar
-              </button>
-            ) : (
-              <div className="waiting-message">
-                Aguardando o host iniciar...
-              </div>
-            )}
-          </div>
+          <LobbyPhase players={gameState.players} isHost={isHost} sendMessage={sendMessage} />
         )}
 
         {gameState.state === 'ANSWERING' && (

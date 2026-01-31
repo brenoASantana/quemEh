@@ -3,181 +3,159 @@ package main
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-
 var (
 	rooms     = make(map[string]*Room)
 	roomMutex sync.RWMutex
 	upgrader  = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
 	}
-	questionsPath string
 )
 
 func main() {
 	loadQuestions()
-
-	rand.Seed(time.Now().UnixNano())
-
-	http.HandleFunc("/ws", handleConnections)
-
-	// Encontrar o diretório de arquivos estáticos
-	// Primeiro tenta ./frontend/dist (quando rodado da raiz do projeto)
-	// Depois tenta ../frontend/dist (quando rodado da pasta backend)
 	var staticDir string
-	if _, err := os.Stat("./frontend/dist"); err == nil {
-		staticDir = "./frontend/dist"
-	} else if _, err := os.Stat("../frontend/dist"); err == nil {
-		staticDir = "../frontend/dist"
-	} else {
-		log.Fatal("Diretório frontend/dist não encontrado")
+	paths := []string{
+		"frontend/dist",
+		"../frontend/dist",
+		"./frontend/dist",
+		"../../frontend/dist",
 	}
-
-	log.Printf("Servindo arquivos estáticos de: %s\n", staticDir)
-
-	fileServer := http.FileServer(http.Dir(staticDir))
-
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			staticDir = path
+			break
+		}
+	}
+	if staticDir == "" {
+		panic("Diretório frontend/dist não encontrado")
+	}
+	http.HandleFunc("/ws", handleConnections)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Se o caminho não for a raiz e tiver uma extensão, sirva o arquivo estático
-		if r.URL.Path != "/" && filepath.Ext(r.URL.Path) != "" {
-			fileServer.ServeHTTP(w, r)
+		if r.URL.Path != "/" && strings.Contains(r.URL.Path, ".") {
+			http.ServeFile(w, r, filepath.Join(staticDir, r.URL.Path))
 			return
 		}
-		// Caso contrário, sirva o index.html (para o roteamento do React)
 		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 	})
-
-	log.Println("Servidor rodando em http://localhost:8080")
+	log.Printf("🎮 Servidor rodando em http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 func loadQuestions() {
-	paths := []string{"./backend/questions.json", "./questions.json"}
+	paths := []string{"questions.json", "backend/questions.json", "./backend/questions.json"}
 	for _, path := range paths {
 		if _, err := os.Stat(path); err == nil {
-			if err := repo.LoadQuestions(path); err != nil {
-				log.Fatal("Erro ao carregar perguntas:", err)
-			}
-			questionsPath = path
-			log.Printf("Perguntas carregadas: %d\n", len(repo.AllQuestions))
+			repo.LoadQuestions(path)
 			return
 		}
 	}
-
-	log.Fatal("Arquivo questions.json não encontrado")
+	panic("Arquivo questions.json não encontrado")
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
-	ws, err := upgrader.Upgrade(w, r, nil)
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("Erro ao fazer upgrade:", err)
 		return
 	}
-
 	roomID := r.URL.Query().Get("room")
 	playerName := r.URL.Query().Get("name")
-
 	if roomID == "" || playerName == "" {
-		ws.Close()
+		conn.Close()
 		return
 	}
-
 	player := &Player{
-		ID:    fmt.Sprintf("%d_%d", time.Now().UnixNano(), rand.Int63()),
-		Name:  playerName,
-		Conn:  ws,
-		Score: 0,
+		ID:   fmt.Sprintf("%d_%s", time.Now().UnixNano(), playerName),
+		Name: playerName,
+		Conn: conn,
 	}
-
 	room := getOrCreateRoom(roomID)
 	player.Room = room
-
 	room.Mutex.Lock()
 	if len(room.Players) == 0 {
 		player.IsHost = true
 	}
 	room.Players[player.ID] = player
 	room.Mutex.Unlock()
-
 	go handlePlayerMessages(player)
 	broadcastGameState(room)
 }
 
 func getOrCreateRoom(id string) *Room {
-	roomMutex.Lock()
-	defer roomMutex.Unlock()
-
-	if room, exists := rooms[id]; exists {
-		return room
+	roomMutex.RLock()
+	r, exists := rooms[id]
+	roomMutex.RUnlock()
+	if !exists {
+		r = &Room{
+			ID:              id,
+			Players:         make(map[string]*Player),
+			State:           StateLobby,
+			Broadcast:       make(chan Message, 100),
+			Answers:         make(map[string]string),
+			VotedGuesses:    make(map[string]map[int]string),
+			ShuffledAnswers: []AnswerWithIndex{},
+			QuestionDeck:    []string{},
+		}
+		roomMutex.Lock()
+		rooms[id] = r
+		roomMutex.Unlock()
+		go runRoom(r)
 	}
-
-	newRoom := &Room{
-		ID:              id,
-		Players:         make(map[string]*Player),
-		State:           StateLobby,
-		Broadcast:       make(chan Message, 100),
-		Answers:         make(map[string]string),
-		VotedGuesses:    make(map[string]map[int]string),
-		ShuffledAnswers: []AnswerWithIndex{},
-		QuestionIndex:   0,
-		QuestionDeck:    []string{},
-	}
-
-	rooms[id] = newRoom
-	go runRoom(newRoom)
-
-	log.Printf("Nova sala criada: %s\n", id)
-	return newRoom
+	return r
 }
 
 func handlePlayerMessages(p *Player) {
 	defer func() {
+		if p.Room != nil {
+			p.Room.Mutex.Lock()
+			delete(p.Room.Players, p.ID)
+			p.Room.Mutex.Unlock()
+		}
 		p.Conn.Close()
-		p.Room.Mutex.Lock()
-		delete(p.Room.Players, p.ID)
-		p.Room.Mutex.Unlock()
-		broadcastGameState(p.Room)
 	}()
-
 	for {
 		var msg Message
-		err := p.Conn.ReadJSON(&msg)
-		if err != nil {
+		if err := p.Conn.ReadJSON(&msg); err != nil {
 			break
 		}
-
 		switch msg.Type {
 		case "START_GAME":
-			if p.IsHost {
-				startGame(p.Room)
+			if p.Room != nil && p.IsHost {
+				p.Room.StartGame()
 			}
 		case "SUBMIT_ANSWER":
-			if answer, ok := msg.Payload.(string); ok && answer != "" {
-				handleAnswer(p, answer)
+			if p.Room != nil {
+				if answer, ok := msg.Payload.(string); ok {
+					p.Room.HandleAnswer(p, answer)
+				}
 			}
 		case "SUBMIT_GUESS":
-			if guessData, ok := msg.Payload.(map[string]interface{}); ok {
-				handleGuess(p, guessData)
+			if p.Room != nil {
+				if guessData, ok := msg.Payload.(map[string]interface{}); ok {
+					p.Room.HandleGuess(p, guessData)
+				}
 			}
 		case "SHOW_RESULTS":
-			if p.IsHost {
-				showResults(p.Room)
+			if p.Room != nil && p.IsHost {
+				p.Room.ShowResults()
 			}
 		case "NEXT_ROUND":
-			if p.IsHost {
-				nextRound(p.Room)
+			if p.Room != nil && p.IsHost {
+				p.Room.NextRound()
 			}
 		case "RESET_GAME":
-			if p.IsHost {
+			if p.Room != nil && p.IsHost {
 				resetGame(p.Room)
 			}
 		}
@@ -242,7 +220,7 @@ func handleAnswer(p *Player, answer string) {
 
 	if allAnswered {
 		p.Room.State = StateVoting
-		shuffledAnswers := shuffleAnswers(p.Room.Answers)
+		shuffledAnswers := ShuffleAnswers(p.Room.Answers)
 		p.Room.ShuffledAnswers = shuffledAnswers
 		p.Room.VotedGuesses = make(map[string]map[int]string)
 	}
@@ -299,46 +277,23 @@ func broadcastGameState(r *Room) {
 		},
 	}
 
-	go func() {
-		select {
-		case r.Broadcast <- msg:
-		case <-time.After(1 * time.Second):
-			log.Println("Timeout ao enviar mensagem")
-		}
-	}()
+	select {
+	case r.Broadcast <- msg:
+	default:
+	}
 }
 
-// Reinicia a partida e zera os pontos de todos
 func resetGame(r *Room) {
 	r.Mutex.Lock()
 	for _, p := range r.Players {
 		p.Score = 0
 	}
+	r.State = StateLobby
 	r.QuestionDeck = repo.GetShuffledQuestions()
 	r.QuestionIndex = 0
-	r.State = StateAnswer
-	if len(r.QuestionDeck) == 0 {
-		r.Question = "Sem perguntas cadastradas"
-	} else {
-		r.Question = r.QuestionDeck[0]
-		       case "START_GAME":
-			       if p.IsHost {
-				       p.Room.StartGame()
-			       }
-		       case "SUBMIT_ANSWER":
-			       if answer, ok := msg.Payload.(string); ok && answer != "" {
-				       p.Room.HandleAnswer(p, answer)
-			       }
-		       case "SUBMIT_GUESS":
-			       if guessData, ok := msg.Payload.(map[string]interface{}); ok {
-				       p.Room.HandleGuess(p, guessData)
-			       }
-		       case "SHOW_RESULTS":
-			       if p.IsHost {
-				       p.Room.ShowResults()
-			       }
-		       case "NEXT_ROUND":
-			       if p.IsHost {
-				       p.Room.NextRound()
-			       }
-			Text:   text,
+	r.Answers = make(map[string]string)
+	r.VotedGuesses = make(map[string]map[int]string)
+	r.ShuffledAnswers = []AnswerWithIndex{}
+	r.Mutex.Unlock()
+	broadcastGameState(r)
+}
