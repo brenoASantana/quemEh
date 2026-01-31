@@ -3,14 +3,15 @@
 help:
 	@echo "Quem É? - Comandos disponíveis:"
 	@echo ""
-	@echo "  make dev          Inicia backend + frontend (dev)"
-	@echo "  make backend      Apenas servidor Go"
-	@echo "  make frontend     Apenas React (dev)"
-	@echo "  make build        Compila tudo com go:embed"
+	@echo "  make dev          Inicia backend + frontend (tudo em uma porta)"
+	@echo "  make backend      Inicia backend + frontend (mesmo que dev)"
+	@echo "  make frontend     Inicia backend + frontend (mesmo que dev)"
+	@echo "  make build        Compila tudo (sem rodar)"
 	@echo "  make production   Build otimizado para produção"
 	@echo "  make install      Instala dependências"
-	@echo "  make ngrok        Guia para usar ngrok"
+	@echo "  make kill         Mata processo na porta 8080"
 	@echo "  make clean        Remove binários"
+	@echo "  make ngrok        Guia para usar ngrok"
 
 install:
 	cd backend && go mod download
@@ -27,13 +28,13 @@ backend:
 	cd frontend && npm run build
 	cd backend && go build -o ../quemEh . && ../quemEh
 
-frontend:
-	cd frontend && npm run dev
+frontend: backend
 
-dev:
-	cd backend && go build -o ../quemEh . && ../quemEh &
-	sleep 2
-	cd frontend && npm run dev
+dev: backend
+
+kill:
+	@echo "Finalizando processo na porta 8080..."
+	@lsof -t -i:8080 | xargs kill -9 2>/dev/null || echo "Nenhum processo encontrado na porta 8080."
 
 clean:
 	rm -f quemEh

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -14,57 +13,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type GameState string
-
-const (
-	StateLobby   GameState = "LOBBY"
-	StateAnswer  GameState = "ANSWERING"
-	StateVoting  GameState = "VOTING"
-	StateResults GameState = "RESULTS"
-)
-
-type Player struct {
-	ID     string          `json:"id"`
-	Name   string          `json:"name"`
-	IsHost bool            `json:"isHost"`
-	Score  int             `json:"score"`
-	Conn   *websocket.Conn `json:"-"`
-	Room   *Room           `json:"-"`
-}
-
-type Room struct {
-	ID              string
-	Players         map[string]*Player
-	State           GameState
-	Question        string
-	Answers         map[string]string
-	VotedGuesses    map[string]string
-	ShuffledAnswers []AnswerWithIndex
-	Broadcast       chan Message
-	Mutex           sync.RWMutex
-	QuestionIndex   int
-	QuestionDeck    []string
-}
-
-type AnswerWithIndex struct {
-	Text      string `json:"text"`
-	RealID    string `json:"-"`
-	DisplayID int    `json:"id"`
-}
-
-type Message struct {
-	Type    string      `json:"type"`
-	Payload interface{} `json:"payload"`
-}
-
-type PublicGameState struct {
-	Players         []*Player         `json:"players"`
-	State           GameState         `json:"state"`
-	Question        string            `json:"question"`
-	Answers         []AnswerWithIndex `json:"answers,omitempty"`
-	VotedGuesses    map[string]string `json:"votedGuesses,omitempty"`
-	LastRoundResult map[string]int    `json:"lastRoundResult,omitempty"`
-}
 
 var (
 	rooms     = make(map[string]*Room)
@@ -82,19 +30,29 @@ func main() {
 
 	http.HandleFunc("/ws", handleConnections)
 
-	staticDir := "./frontend/dist"
-	if _, err := os.Stat(staticDir); err != nil {
-		staticDir = "./dist"
+	// Encontrar o diretório de arquivos estáticos
+	// Primeiro tenta ./frontend/dist (quando rodado da raiz do projeto)
+	// Depois tenta ../frontend/dist (quando rodado da pasta backend)
+	var staticDir string
+	if _, err := os.Stat("./frontend/dist"); err == nil {
+		staticDir = "./frontend/dist"
+	} else if _, err := os.Stat("../frontend/dist"); err == nil {
+		staticDir = "../frontend/dist"
+	} else {
+		log.Fatal("Diretório frontend/dist não encontrado")
 	}
+
+	log.Printf("Servindo arquivos estáticos de: %s\n", staticDir)
 
 	fileServer := http.FileServer(http.Dir(staticDir))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		if path != "/" && filepath.Ext(path) != "" {
+		// Se o caminho não for a raiz e tiver uma extensão, sirva o arquivo estático
+		if r.URL.Path != "/" && filepath.Ext(r.URL.Path) != "" {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
+		// Caso contrário, sirva o index.html (para o roteamento do React)
 		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 	})
 
@@ -116,17 +74,6 @@ func loadQuestions() {
 	}
 
 	log.Fatal("Arquivo questions.json não encontrado")
-}
-
-func reloadQuestions() error {
-	if questionsPath == "" {
-		return errors.New("caminho do questions.json não definido")
-	}
-	if err := repo.LoadQuestions(questionsPath); err != nil {
-		return err
-	}
-	log.Printf("Perguntas recarregadas: %d\n", len(repo.AllQuestions))
-	return nil
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +126,7 @@ func getOrCreateRoom(id string) *Room {
 		State:           StateLobby,
 		Broadcast:       make(chan Message, 100),
 		Answers:         make(map[string]string),
-		VotedGuesses:    make(map[string]string),
+		VotedGuesses:    make(map[string]map[int]string),
 		ShuffledAnswers: []AnswerWithIndex{},
 		QuestionIndex:   0,
 		QuestionDeck:    []string{},
@@ -219,32 +166,19 @@ func handlePlayerMessages(p *Player) {
 			}
 		case "SUBMIT_GUESS":
 			if guessData, ok := msg.Payload.(map[string]interface{}); ok {
-				if answerId, exists := guessData["answerId"]; exists {
-					handleGuess(p, answerId.(string))
-				}
+				handleGuess(p, guessData)
+			}
+		case "SHOW_RESULTS":
+			if p.IsHost {
+				showResults(p.Room)
 			}
 		case "NEXT_ROUND":
 			if p.IsHost {
 				nextRound(p.Room)
 			}
-		case "RELOAD_QUESTIONS":
+		case "RESET_GAME":
 			if p.IsHost {
-				if err := reloadQuestions(); err != nil {
-					log.Println("Erro ao recarregar perguntas:", err)
-					break
-				}
-				p.Room.Mutex.Lock()
-				p.Room.QuestionDeck = repo.GetShuffledQuestions()
-				p.Room.QuestionIndex = 0
-				if p.Room.State == StateLobby || p.Room.State == StateResults {
-					if len(p.Room.QuestionDeck) == 0 {
-						p.Room.Question = "Sem perguntas cadastradas"
-					} else {
-						p.Room.Question = p.Room.QuestionDeck[0]
-					}
-				}
-				p.Room.Mutex.Unlock()
-				broadcastGameState(p.Room)
+				resetGame(p.Room)
 			}
 		}
 	}
@@ -282,7 +216,7 @@ func startGame(r *Room) {
 		r.Question = r.QuestionDeck[0]
 	}
 	r.Answers = make(map[string]string)
-	r.VotedGuesses = make(map[string]string)
+	r.VotedGuesses = make(map[string]map[int]string)
 	r.ShuffledAnswers = []AnswerWithIndex{}
 	r.Mutex.Unlock()
 
@@ -291,104 +225,26 @@ func startGame(r *Room) {
 
 func handleAnswer(p *Player, answer string) {
 	p.Room.Mutex.Lock()
+
+	if _, alreadyAnswered := p.Room.Answers[p.ID]; alreadyAnswered {
+		p.Room.Mutex.Unlock()
+		return
+	}
+
+	if answer == "" {
+		p.Room.Mutex.Unlock()
+		return
+	}
+
 	p.Room.Answers[p.ID] = answer
 
 	allAnswered := len(p.Room.Answers) == len(p.Room.Players)
 
 	if allAnswered {
 		p.Room.State = StateVoting
-		// Embaralha as respostas
 		shuffledAnswers := shuffleAnswers(p.Room.Answers)
 		p.Room.ShuffledAnswers = shuffledAnswers
-		p.Room.VotedGuesses = make(map[string]string) // Reset de votos
-	}
-	p.Room.Mutex.Unlock()
-
-	broadcastGameState(p.Room)
-}
-
-func handleGuess(p *Player, answerId string) {
-	p.Room.Mutex.Lock()
-	p.Room.VotedGuesses[p.ID] = answerId
-	allVoted := len(p.Room.VotedGuesses) == len(p.Room.Players)
-	p.Room.Mutex.Unlock()
-
-	if allVoted {
-		// Calcular scores
-		calculateScores(p.Room)
-		p.Room.Mutex.Lock()
-		p.Room.State = StateResults
-		p.Room.Mutex.Unlock()
-	}
-
-	broadcastGameState(p.Room)
-}
-
-func nextRound(r *Room) {
-	r.Mutex.Lock()
-	r.QuestionIndex++
-	if r.QuestionIndex >= len(r.QuestionDeck) {
-		r.QuestionDeck = repo.GetShuffledQuestions()
-		r.QuestionIndex = 0
-	}
-
-	r.State = StateAnswer
-	if len(r.QuestionDeck) == 0 {
-		r.Question = "Sem perguntas cadastradas"
-	} else {
-		r.Question = r.QuestionDeck[r.QuestionIndex]
-	}
-	r.Answers = make(map[string]string)
-	r.VotedGuesses = make(map[string]string)
-	r.ShuffledAnswers = []AnswerWithIndex{}
-	r.Mutex.Unlock()
-
-	broadcastGameState(r)
-}
-
-func shuffleAnswers(answers map[string]string) []AnswerWithIndex {
-	shuffled := []AnswerWithIndex{}
-	ids := []string{}
-
-	for id, text := range answers {
-		ids = append(ids, id)
-		shuffled = append(shuffled, AnswerWithIndex{
-			Text:   text,
-			RealID: id,
-		})
-	}
-
-	// Fisher-Yates shuffle
-	for i := len(shuffled) - 1; i > 0; i-- {
-		j := rand.Intn(i + 1)
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-	}
-
-	// Atribui DisplayIDs sequenciais
-	for i := range shuffled {
-		shuffled[i].DisplayID = i
-	}
-
-	return shuffled
-}
-
-func calculateScores(r *Room) {
-	r.Mutex.RLock()
-	defer r.Mutex.RUnlock()
-
-	correct := make(map[int]string)
-	for _, ans := range r.ShuffledAnswers {
-		correct[ans.DisplayID] = ans.RealID
-	}
-
-	for playerId, guessDisplayId := range r.VotedGuesses {
-		var displayId int
-		fmt.Sscanf(guessDisplayId, "%d", &displayId)
-		if guessId, exists := correct[displayId]; exists && guessId == correct[displayId] {
-			if player, exists := r.Players[playerId]; exists {
-				player.Score += 10
-			}
-		}
+		p.Room.VotedGuesses = make(map[string]map[int]string)
 	}
 }
 
@@ -409,12 +265,24 @@ func broadcastGameState(r *Room) {
 	var lastRoundResult map[string]int
 	if r.State == StateResults {
 		lastRoundResult = make(map[string]int)
+
+		// Criar mapa de DisplayID -> RealID para facilitar lookup
+		displayToReal := make(map[int]string)
 		for _, ans := range r.ShuffledAnswers {
-			correct := 0
-			if guess, exists := r.VotedGuesses[ans.RealID]; exists && guess == fmt.Sprintf("%d", ans.DisplayID) {
-				correct = 1
+			displayToReal[ans.DisplayID] = ans.RealID
+		}
+
+		// Contar votos corretos por jogador
+		for playerId := range r.Players {
+			correctVotes := 0
+			if playerVotes, exists := r.VotedGuesses[playerId]; exists {
+				for answerDisplayId, guessedPlayerId := range playerVotes {
+					if correctPlayerId, ok := displayToReal[answerDisplayId]; ok && correctPlayerId == guessedPlayerId {
+						correctVotes++
+					}
+				}
 			}
-			lastRoundResult[ans.RealID] = correct
+			lastRoundResult[playerId] = correctVotes
 		}
 	}
 
@@ -424,6 +292,7 @@ func broadcastGameState(r *Room) {
 			Players:         playersList,
 			State:           r.State,
 			Question:        r.Question,
+			AnswersCount:    len(r.Answers),
 			Answers:         answersList,
 			VotedGuesses:    r.VotedGuesses,
 			LastRoundResult: lastRoundResult,
@@ -438,3 +307,38 @@ func broadcastGameState(r *Room) {
 		}
 	}()
 }
+
+// Reinicia a partida e zera os pontos de todos
+func resetGame(r *Room) {
+	r.Mutex.Lock()
+	for _, p := range r.Players {
+		p.Score = 0
+	}
+	r.QuestionDeck = repo.GetShuffledQuestions()
+	r.QuestionIndex = 0
+	r.State = StateAnswer
+	if len(r.QuestionDeck) == 0 {
+		r.Question = "Sem perguntas cadastradas"
+	} else {
+		r.Question = r.QuestionDeck[0]
+		       case "START_GAME":
+			       if p.IsHost {
+				       p.Room.StartGame()
+			       }
+		       case "SUBMIT_ANSWER":
+			       if answer, ok := msg.Payload.(string); ok && answer != "" {
+				       p.Room.HandleAnswer(p, answer)
+			       }
+		       case "SUBMIT_GUESS":
+			       if guessData, ok := msg.Payload.(map[string]interface{}); ok {
+				       p.Room.HandleGuess(p, guessData)
+			       }
+		       case "SHOW_RESULTS":
+			       if p.IsHost {
+				       p.Room.ShowResults()
+			       }
+		       case "NEXT_ROUND":
+			       if p.IsHost {
+				       p.Room.NextRound()
+			       }
+			Text:   text,

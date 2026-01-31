@@ -1,14 +1,13 @@
-import { useState } from 'react';
-import './App.css';
-import { useGameSocket } from './useGameSocket';
+import AnsweringPhase from './components/AnsweringPhase';
+import VotingPhase from './components/VotingPhase';
 
-const Avatar = ({ name, size = "md" }) => (
-  <img
-    src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`}
-    alt="avatar"
-    className={`avatar avatar-${size}`}
-  />
-);
+import { useEffect, useState } from 'react';
+import './App.css';
+import Avatar from './Avatar';
+import AnswersReview from './components/AnswersReview';
+import Header from './components/Header';
+import Ranking from './components/Ranking';
+import { useGameSocket } from './useGameSocket';
 
 function App() {
   const { connect, isConnected, gameState, sendMessage } = useGameSocket();
@@ -16,6 +15,24 @@ function App() {
   const [room, setRoom] = useState('');
   const [answer, setAnswer] = useState('');
   const [guess, setGuess] = useState(null);
+  const [votedAnswer, setVotedAnswer] = useState(null);
+  const [submittedAnswer, setSubmittedAnswer] = useState('');
+  const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [localVotes, setLocalVotes] = useState({});
+  const [hasSubmittedVotes, setHasSubmittedVotes] = useState(false);
+
+  useEffect(() => {
+    if (gameState?.state === 'ANSWERING') {
+      setHasSubmitted(false);
+      setSubmittedAnswer('');
+      setAnswer('');
+    }
+    if (gameState?.state === 'VOTING') {
+      setVotedAnswer(null);
+      setLocalVotes({});
+      setHasSubmittedVotes(false);
+    }
+  }, [gameState?.state, gameState?.question]);
 
   if (!isConnected) {
     return (
@@ -55,27 +72,37 @@ function App() {
   }
 
   if (!gameState) {
-    return <div className="loading">Conectando...</div>;
+    return (
+      <div className="container">
+        <div className="loading" style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+          <p>⏳ Conectando ao jogo...</p>
+        </div>
+      </div>
+    );
   }
 
-  const me = gameState.players?.find(p => p.name === name);
-  const amHost = me?.isHost;
+  let currentPlayer;
+  try {
+    currentPlayer = gameState.players?.find(p => p.name === name);
+  } catch (e) {
+    console.error('Erro ao encontrar jogador atual:', e);
+    return (
+      <div className="container">
+        <div className="loading" style={{ padding: '40px', textAlign: 'center', color: 'red' }}>
+          <p>❌ Erro ao carregar jogo. Recarregue a página.</p>
+        </div>
+      </div>
+    );
+  }
+  const isHost = currentPlayer?.isHost;
+  const answeredCount = gameState.answersCount ?? Object.keys(gameState.answers || {}).length;
+  const totalPlayers = gameState.players?.length || 0;
+  const votedCount = Object.keys(gameState.votedGuesses || {}).length;
+  const hasVotedForAllAnswers = votedCount === totalPlayers;
 
   return (
     <div className="container game-screen">
-      <header className="game-header">
-        <div className="header-left">
-          <div className="room-code">Sala: <strong>{room}</strong></div>
-          <div className="game-state">{getStateLabel(gameState.state)}</div>
-        </div>
-        <div className="header-right">
-          <Avatar name={name} size="sm" />
-          <div className="player-info">
-            <p className="player-name">{name} {amHost ? '👑' : ''}</p>
-            <p className="player-score">{me?.score || 0} pts</p>
-          </div>
-        </div>
-      </header>
+      <Header room={room} name={name} isHost={isHost} currentPlayer={{...currentPlayer, stateLabel: getStateLabel(gameState.state)}} />
 
       <main className="game-content">
         {gameState.state === 'LOBBY' && (
@@ -92,21 +119,13 @@ function App() {
               ))}
             </div>
 
-            {amHost ? (
-              <div className="host-actions">
-                <button
-                  className="btn-primary btn-large"
-                  onClick={() => sendMessage('START_GAME', null)}
-                >
-                  Começar
-                </button>
-                <button
-                  className="btn-secondary"
-                  onClick={() => sendMessage('RELOAD_QUESTIONS', null)}
-                >
-                  Recarregar perguntas
-                </button>
-              </div>
+            {isHost ? (
+              <button
+                className="btn-primary btn-large"
+                onClick={() => sendMessage('START_GAME', null)}
+              >
+                Começar
+              </button>
             ) : (
               <div className="waiting-message">
                 Aguardando o host iniciar...
@@ -116,128 +135,63 @@ function App() {
         )}
 
         {gameState.state === 'ANSWERING' && (
-          <div className="phase answering-phase">
-            <div className="question-container">
-              <h2>Pergunta</h2>
-              <div className="question-card">
-                <p>{gameState.question}</p>
-              </div>
-            </div>
-
-            <div className="answer-input-container">
-              <textarea
-                placeholder="Sua resposta..."
-                value={answer}
-                onChange={e => setAnswer(e.target.value)}
-                className="answer-textarea"
-                maxLength={500}
-              />
-              <div className="char-count">{answer.length}/500</div>
-
-              <button
-                className="btn-primary btn-large"
-                onClick={() => {
-                  sendMessage('SUBMIT_ANSWER', answer);
-                  setAnswer('');
-                }}
-                disabled={!answer.trim()}
-              >
-                Enviar
-              </button>
-
-              <div className="progress-bar">
-                <p>Respondidos: {Object.keys(gameState.answers || {}).length}/{gameState.players.length}</p>
-                <div className="bar-fill" style={{width: `${(Object.keys(gameState.answers || {}).length / gameState.players.length) * 100}%`}}></div>
-              </div>
-            </div>
-          </div>
+          <AnsweringPhase
+            question={gameState.question}
+            answer={answer}
+            setAnswer={setAnswer}
+            hasSubmitted={hasSubmitted}
+            submittedAnswer={submittedAnswer}
+            setSubmittedAnswer={setSubmittedAnswer}
+            setHasSubmitted={setHasSubmitted}
+            answeredCount={answeredCount}
+            totalPlayers={totalPlayers}
+            sendMessage={sendMessage}
+          />
         )}
 
         {gameState.state === 'VOTING' && (
-          <div className="phase voting-phase">
-            <h2>Quem respondeu?</h2>
-            <p className="voting-instruction">Tente adivinhar</p>
-
-            <div className="answers-container">
-              {gameState.answers && gameState.answers.map((ans) => (
-                <div
-                  key={ans.id}
-                  className={`answer-card ${guess === ans.id ? 'selected' : ''}`}
-                  onClick={() => {
-                    setGuess(ans.id);
-                    sendMessage('SUBMIT_GUESS', { answerId: ans.id.toString() });
-                  }}
-                >
-                  <div className="answer-number">#{ans.id + 1}</div>
-                  <p className="answer-text">"{ans.text}"</p>
-                  <div className="player-options">
-                    {gameState.players.map(p => (
-                      <button
-                        key={p.id}
-                        className={`guess-btn ${guess === ans.id ? 'active' : ''}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setGuess(ans.id);
-                          sendMessage('SUBMIT_GUESS', { answerId: ans.id.toString() });
-                        }}
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="progress-bar">
-              <p>Votados: {Object.keys(gameState.votedGuesses || {}).length}/{gameState.players.length}</p>
-              <div className="bar-fill" style={{width: `${(Object.keys(gameState.votedGuesses || {}).length / gameState.players.length) * 100}%`}}></div>
-            </div>
-          </div>
+          <VotingPhase
+            answers={gameState.answers}
+            players={gameState.players}
+            currentPlayer={currentPlayer}
+            hasSubmittedVotes={hasSubmittedVotes}
+            localVotes={localVotes}
+            setLocalVotes={setLocalVotes}
+            gameState={gameState}
+            sendMessage={sendMessage}
+            totalPlayers={totalPlayers}
+          />
         )}
 
-        {gameState.state === 'RESULTS' && (
+        {(gameState.state === 'RESULTS' || gameState.state === 'GAME_OVER') && (
           <div className="phase results-phase">
-            <h2>Resultados</h2>
+            <h2>{gameState.state === 'GAME_OVER' ? '🏆 Fim de Jogo' : 'Resultados'}</h2>
 
             <div className="results-container">
-              <div className="scores-summary">
-                <h3>Placar</h3>
-                <div className="scores-list">
-                  {gameState.players
-                    .sort((a, b) => b.score - a.score)
-                    .map((p, i) => (
-                      <div key={p.id} className="score-row">
-                        <span className="rank">#{i + 1}</span>
-                        <Avatar name={p.name} size="sm" />
-                        <span className="name">{p.name}</span>
-                        <span className="score">{p.score} pts</span>
-                      </div>
-                    ))}
-                </div>
-              </div>
+              <Ranking players={gameState.players} gameState={gameState} />
 
-              <div className="answers-review">
-                <h3>Respostas</h3>
-                {gameState.answers && gameState.answers.map((ans) => {
-                  const writer = gameState.players.find(p => p.id === ans.id);
-                  return (
-                    <div key={ans.id} className="answer-reveal">
-                      <p className="answer-text">"{ans.text}"</p>
-                      <p className="answer-writer">Por: {writer?.name}</p>
-                    </div>
-                  );
-                })}
-              </div>
+              <AnswersReview answers={gameState.answers} players={gameState.players} votedGuesses={gameState.votedGuesses} />
             </div>
 
-            {amHost && (
-              <button
-                className="btn-primary btn-large"
-                onClick={() => sendMessage('NEXT_ROUND', null)}
-              >
-                Próxima rodada
-              </button>
+            {isHost && (
+              gameState.state === 'GAME_OVER' ? (
+                <button
+                  className="btn-primary btn-large"
+                  onClick={() => {
+                    // Zera os pontos de todos e reinicia o jogo
+                    sendMessage('RESET_GAME', null);
+                  }}
+                >
+                  Nova partida
+                </button>
+              ) : (
+                <button
+                  className="btn-primary btn-large"
+                  onClick={() => sendMessage('NEXT_ROUND', null)}
+                >
+                  Próxima rodada
+                </button>
+              )
             )}
           </div>
         )}
