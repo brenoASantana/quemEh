@@ -93,12 +93,20 @@ function App() {
             </div>
 
             {amHost ? (
-              <button
-                className="btn-primary btn-large"
-                onClick={() => sendMessage('START_GAME', null)}
-              >
-                Começar
-              </button>
+              <div className="host-actions">
+                <button
+                  className="btn-primary btn-large"
+                  onClick={() => sendMessage('START_GAME', null)}
+                >
+                  Começar
+                </button>
+                <button
+                  className="btn-secondary"
+                  onClick={() => sendMessage('RELOAD_QUESTIONS', null)}
+                >
+                  Recarregar perguntas
+                </button>
+              </div>
             ) : (
               <div className="waiting-message">
                 Aguardando o host iniciar...

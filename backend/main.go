@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -42,6 +43,7 @@ type Room struct {
 	Broadcast       chan Message
 	Mutex           sync.RWMutex
 	QuestionIndex   int
+	QuestionDeck    []string
 }
 
 type AnswerWithIndex struct {
@@ -70,21 +72,12 @@ var (
 	upgrader  = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
-	questions = []string{
-		"Se você fosse morrer em 5 dias e só você soubesse disso, o que você faria?",
-		"Qual é o seu maior medo em relação ao seu futuro?",
-		"Se tivesse um superpoder, qual seria e por quê?",
-		"Qual é o segredo mais pesado que você nunca contou a ninguém?",
-		"O que você faria com 1 milhão de reais?",
-		"Qual pessoa famosa você mais gostaria de jantar?",
-		"Se pudesse voltar no tempo, o que mudaria?",
-		"Qual é a coisa mais estranha que você já fez?",
-		"O que você mais ama na vida?",
-		"Se fosse invisível por um dia, o que faria?",
-	}
+	questionsPath string
 )
 
 func main() {
+	loadQuestions()
+
 	rand.Seed(time.Now().UnixNano())
 
 	http.HandleFunc("/ws", handleConnections)
@@ -107,6 +100,33 @@ func main() {
 
 	log.Println("Servidor rodando em http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func loadQuestions() {
+	paths := []string{"./backend/questions.json", "./questions.json"}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			if err := repo.LoadQuestions(path); err != nil {
+				log.Fatal("Erro ao carregar perguntas:", err)
+			}
+			questionsPath = path
+			log.Printf("Perguntas carregadas: %d\n", len(repo.AllQuestions))
+			return
+		}
+	}
+
+	log.Fatal("Arquivo questions.json não encontrado")
+}
+
+func reloadQuestions() error {
+	if questionsPath == "" {
+		return errors.New("caminho do questions.json não definido")
+	}
+	if err := repo.LoadQuestions(questionsPath); err != nil {
+		return err
+	}
+	log.Printf("Perguntas recarregadas: %d\n", len(repo.AllQuestions))
+	return nil
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +182,7 @@ func getOrCreateRoom(id string) *Room {
 		VotedGuesses:    make(map[string]string),
 		ShuffledAnswers: []AnswerWithIndex{},
 		QuestionIndex:   0,
+		QuestionDeck:    []string{},
 	}
 
 	rooms[id] = newRoom
@@ -206,6 +227,25 @@ func handlePlayerMessages(p *Player) {
 			if p.IsHost {
 				nextRound(p.Room)
 			}
+		case "RELOAD_QUESTIONS":
+			if p.IsHost {
+				if err := reloadQuestions(); err != nil {
+					log.Println("Erro ao recarregar perguntas:", err)
+					break
+				}
+				p.Room.Mutex.Lock()
+				p.Room.QuestionDeck = repo.GetShuffledQuestions()
+				p.Room.QuestionIndex = 0
+				if p.Room.State == StateLobby || p.Room.State == StateResults {
+					if len(p.Room.QuestionDeck) == 0 {
+						p.Room.Question = "Sem perguntas cadastradas"
+					} else {
+						p.Room.Question = p.Room.QuestionDeck[0]
+					}
+				}
+				p.Room.Mutex.Unlock()
+				broadcastGameState(p.Room)
+			}
 		}
 	}
 }
@@ -233,9 +273,14 @@ func runRoom(r *Room) {
 
 func startGame(r *Room) {
 	r.Mutex.Lock()
+	r.QuestionDeck = repo.GetShuffledQuestions()
 	r.QuestionIndex = 0
 	r.State = StateAnswer
-	r.Question = questions[0]
+	if len(r.QuestionDeck) == 0 {
+		r.Question = "Sem perguntas cadastradas"
+	} else {
+		r.Question = r.QuestionDeck[0]
+	}
 	r.Answers = make(map[string]string)
 	r.VotedGuesses = make(map[string]string)
 	r.ShuffledAnswers = []AnswerWithIndex{}
@@ -282,12 +327,17 @@ func handleGuess(p *Player, answerId string) {
 func nextRound(r *Room) {
 	r.Mutex.Lock()
 	r.QuestionIndex++
-	if r.QuestionIndex >= len(questions) {
+	if r.QuestionIndex >= len(r.QuestionDeck) {
+		r.QuestionDeck = repo.GetShuffledQuestions()
 		r.QuestionIndex = 0
 	}
 
 	r.State = StateAnswer
-	r.Question = questions[r.QuestionIndex]
+	if len(r.QuestionDeck) == 0 {
+		r.Question = "Sem perguntas cadastradas"
+	} else {
+		r.Question = r.QuestionDeck[r.QuestionIndex]
+	}
 	r.Answers = make(map[string]string)
 	r.VotedGuesses = make(map[string]string)
 	r.ShuffledAnswers = []AnswerWithIndex{}

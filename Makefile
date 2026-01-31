@@ -18,20 +18,20 @@ install:
 
 build:
 	cd frontend && npm run build
-	cd backend && go build -o ../quemEh main.go
+	cd backend && go build -o ../quemEh .
 
 production: build
 	@echo "✅ Binário pronto! Execute: ./quemEh"
 
 backend:
 	cd frontend && npm run build
-	cd backend && go build -o ../quemEh main.go && ../quemEh
+	cd backend && go build -o ../quemEh . && ../quemEh
 
 frontend:
 	cd frontend && npm run dev
 
 dev:
-	cd backend && go build -o ../quemEh main.go && ../quemEh &
+	cd backend && go build -o ../quemEh . && ../quemEh &
 	sleep 2
 	cd frontend && npm run dev
 
