@@ -14,7 +14,7 @@ help:
 	@echo "  make ngrok        Guia para usar ngrok"
 
 install:
-	cd backend && go mod download
+	cd backend && go mod tidy
 	cd frontend && npm install
 
 build:
