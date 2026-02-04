@@ -37,6 +37,7 @@ type Room struct {
 	Mutex           sync.RWMutex
 	QuestionIndex   int
 	QuestionDeck    []string
+	AnswersShuffled bool
 }
 
 type AnswerWithIndex struct {

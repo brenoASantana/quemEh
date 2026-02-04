@@ -15,6 +15,7 @@ func (r *Room) StartGame() {
 	r.Answers = make(map[string]string)
 	r.VotedGuesses = make(map[string]map[int]string)
 	r.ShuffledAnswers = []AnswerWithIndex{}
+	r.AnswersShuffled = false
 	r.Mutex.Unlock()
 	broadcastGameState(r)
 }
@@ -31,10 +32,11 @@ func (r *Room) HandleAnswer(p *Player, answer string) {
 	}
 	r.Answers[p.ID] = answer
 	allAnswered := len(r.Answers) == len(r.Players)
-	if allAnswered {
+	if allAnswered && !r.AnswersShuffled {
 		r.State = StateVoting
 		shuffledAnswers := ShuffleAnswers(r.Answers)
 		r.ShuffledAnswers = shuffledAnswers
+		r.AnswersShuffled = true
 		r.VotedGuesses = make(map[string]map[int]string)
 	}
 	r.Mutex.Unlock()
@@ -108,6 +110,7 @@ func (r *Room) NextRound() {
 	r.Answers = make(map[string]string)
 	r.VotedGuesses = make(map[string]map[int]string)
 	r.ShuffledAnswers = []AnswerWithIndex{}
+	r.AnswersShuffled = false
 	r.Mutex.Unlock()
 	broadcastGameState(r)
 }

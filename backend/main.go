@@ -196,6 +196,7 @@ func startGame(r *Room) {
 	r.Answers = make(map[string]string)
 	r.VotedGuesses = make(map[string]map[int]string)
 	r.ShuffledAnswers = []AnswerWithIndex{}
+	r.AnswersShuffled = false
 	r.Mutex.Unlock()
 
 	broadcastGameState(r)
@@ -236,7 +237,7 @@ func broadcastGameState(r *Room) {
 	}
 
 	answersList := r.ShuffledAnswers
-	if r.State != StateVoting && r.State != StateResults {
+	if r.State != StateVoting && r.State != StateResults && r.State != "GAME_OVER" {
 		answersList = []AnswerWithIndex{}
 	}
 
@@ -294,6 +295,7 @@ func resetGame(r *Room) {
 	r.Answers = make(map[string]string)
 	r.VotedGuesses = make(map[string]map[int]string)
 	r.ShuffledAnswers = []AnswerWithIndex{}
+	r.AnswersShuffled = false
 	r.Mutex.Unlock()
 	broadcastGameState(r)
 }
